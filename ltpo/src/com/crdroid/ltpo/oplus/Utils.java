@@ -30,19 +30,22 @@ public class Utils {
      * @param filename      The filename
      * @param value         The value
      */
-    public static void writeValue(String filename, String value) {
+    public static boolean writeValue(String filename, String value) {
         if (filename == null) {
-            return;
+            return false;
         }
         try {
             FileOutputStream fos = new FileOutputStream(new File(filename));
             fos.write(value.getBytes());
             fos.flush();
             fos.close();
+            return true;
         } catch (FileNotFoundException e) {
             e.printStackTrace();
+            return false;
         } catch (IOException e) {
             e.printStackTrace();
+            return false;
         }
     }
 

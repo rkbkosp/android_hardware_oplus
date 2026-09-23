@@ -45,6 +45,20 @@ public class LTPOSettings extends SettingsBasePreferenceFragment
 
     private static final String FILE_LTPO = "/sys/kernel/oplus_display/adfr_config";
 
+    /**
+     * What the display driver loads from the panel device tree when the panel initialises: after
+     * every boot the node reads back as this on astonc. The bits are GLOBAL | IDLE_MODE |
+     * OA_BL_MUTUAL_EXCLUSION | HIGH_PRECISION_SA_MODE | HIGH_PRECISION_SWITCH, the configuration
+     * the vendor tunes this panel with.
+     *
+     * Enabling LTPO has to restore that value. It used to write 0x109f, which sets an undefined
+     * bit 12 plus a different feature set (FAKEFRAME, VSYNC_SWITCH, VSYNC_SWITCH_MODE,
+     * SA_MODE_RESTORE), so it replaced the vendor configuration with an unvalidated one. The
+     * driver keeps no default of its own: the node's value after boot is the device tree's.
+     */
+    private static final String LTPO_ON_VALUE = "0xe51";
+    private static final String LTPO_OFF_VALUE = "0x0";
+
     private SwitchPreferenceCompat mLTPOSwitch;
 
     @Override
@@ -56,9 +70,8 @@ public class LTPOSettings extends SettingsBasePreferenceFragment
         mLTPOSwitch = (SwitchPreferenceCompat) findPreference(KEY_LTPO_SWITCH);
         if (Utils.fileWritable(FILE_LTPO)) {
             mLTPOSwitch.setEnabled(true);
-            String current = Utils.getFileValue(FILE_LTPO, "0x0");
-            boolean enabled = !"0x0".equals(current != null ? current.trim() : null);
-            mLTPOSwitch.setChecked(sharedPrefs.getBoolean(KEY_LTPO_SWITCH, enabled));
+            String current = currentValue();
+            mLTPOSwitch.setChecked(sharedPrefs.getBoolean(KEY_LTPO_SWITCH, isEnabled(current)));
             mLTPOSwitch.setOnPreferenceChangeListener(this);
         } else {
             mLTPOSwitch.setEnabled(false);
@@ -71,7 +84,7 @@ public class LTPOSettings extends SettingsBasePreferenceFragment
             boolean enabled = (Boolean) newValue;
             SharedPreferences sharedPrefs = PreferenceManager.getDefaultSharedPreferences(getContext());
             sharedPrefs.edit().putBoolean(KEY_LTPO_SWITCH, enabled).apply();
-    	    Utils.writeValue(FILE_LTPO, enabled ? "0x109f" : "0x0");
+            writeLtpoState(enabled);
             return true;
         }
 
@@ -79,12 +92,49 @@ public class LTPOSettings extends SettingsBasePreferenceFragment
     }
 
     public static void restoreLTPOSetting(Context context) {
-        if (Utils.fileWritable(FILE_LTPO)) {
-            SharedPreferences sharedPrefs = PreferenceManager.getDefaultSharedPreferences(context);
-            String current = Utils.getFileValue(FILE_LTPO, "0x0");
-            boolean enabled = !"0x0".equals(current != null ? current.trim() : null);
-            boolean value = sharedPrefs.getBoolean(KEY_LTPO_SWITCH, enabled);
-            Utils.writeValue(FILE_LTPO, value ? "0x109f" : "0x0");
+        if (!Utils.fileWritable(FILE_LTPO)) {
+            Log.w(TAG, "adfr_config is not writable, leaving the panel default alone");
+            return;
         }
+        String current = currentValue();
+        if (current == null) {
+            Log.w(TAG, "adfr_config is unreadable, leaving the panel default alone");
+            return;
+        }
+        String trimmed = current.trim();
+        if (!LTPO_OFF_VALUE.equalsIgnoreCase(trimmed) && !LTPO_ON_VALUE.equalsIgnoreCase(trimmed)) {
+            Log.w(TAG, "adfr_config holds " + trimmed + ", expected the panel default "
+                    + LTPO_ON_VALUE + "; writing " + LTPO_ON_VALUE + " for LTPO on");
+        }
+        SharedPreferences sharedPrefs = PreferenceManager.getDefaultSharedPreferences(context);
+        writeLtpoState(sharedPrefs.getBoolean(KEY_LTPO_SWITCH, isEnabled(trimmed)));
+    }
+
+    /**
+     * Writes only when the node disagrees, then reads it back, so the switch cannot end up
+     * claiming a state the panel is not in.
+     */
+    private static void writeLtpoState(boolean enabled) {
+        String want = enabled ? LTPO_ON_VALUE : LTPO_OFF_VALUE;
+        String before = currentValue();
+        if (want.equalsIgnoreCase(before != null ? before.trim() : null)) {
+            return;
+        }
+        if (!Utils.writeValue(FILE_LTPO, want)) {
+            Log.w(TAG, "writing " + want + " to adfr_config failed, node still " + before);
+            return;
+        }
+        String after = currentValue();
+        if (after == null || !want.equalsIgnoreCase(after.trim())) {
+            Log.w(TAG, "adfr_config did not take " + want + ", reads back as " + after);
+        }
+    }
+
+    private static boolean isEnabled(String value) {
+        return value != null && !LTPO_OFF_VALUE.equalsIgnoreCase(value.trim());
+    }
+
+    private static String currentValue() {
+        return Utils.getFileValue(FILE_LTPO, null);
     }
 }
